@@ -7,7 +7,8 @@ from google.auth.transport.requests import Request
 
 SCOPES = ['https://www.googleapis.com/auth/classroom.courses.readonly', #список курсов
           'https://www.googleapis.com/auth/classroom.rosters.readonly', #список студентов
-          'https://www.googleapis.com/auth/classroom.student-submissions.students.readonly' #список заданий и сабмишеннов
+          'https://www.googleapis.com/auth/classroom.student-submissions.students.readonly', 
+          'https://www.googleapis.com/auth/classroom.student-submissions.me.readonly'
          ]
 
 def auth():
