@@ -116,3 +116,21 @@ def checkMissingKeys(data, missingValues):
             data[key[0]] = key[1]
             
     return data
+
+
+
+
+"""
+Эта функция принимает название файла и информацию (dict). Функция создает и
+записывает в него эту информацию.
+"""
+def make_file(title, data):
+    import os
+    import json
+    try:
+        os.mkdir('data/')
+    except OSError:
+        pass
+    with open('data/' + title + '.json', 'w+') as fp:
+        json.dump(data, fp)
+        print (title + '.json created')
