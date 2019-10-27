@@ -1,5 +1,6 @@
 import auth
 import numpy as np
+import pandas as pd
 
 #аутентификация
 service = auth.auth()
@@ -62,16 +63,21 @@ def get_submissions(courseId, courseWork, studentId):
                 #сохраняем задание
                     coursework.append(task)
         #если задание для всех студентов
-        else:
+            else:
             #загружаем и сохраняем информацию о работе
+                res = service.courses().courseWork().studentSubmissions().list(courseId=courseId, 
+                                                                          courseWorkId=task['id'],
+                                                                          userId=studentId).execute()
+                submissions.append(res.get('studentSubmissions',[])[0])
+                coursework.append(task)
+        else:
             res = service.courses().courseWork().studentSubmissions().list(courseId=courseId, 
                                                                           courseWorkId=task['id'],
                                                                           userId=studentId).execute()
             submissions.append(res.get('studentSubmissions',[])[0])
             coursework.append(task)
     return coursework, submissions
-
-
+    
 
 
 """
@@ -90,7 +96,7 @@ def get_data(studentId):
         studentSumbissions = []
         #загружаем список заданий для каждого курса
         result = service.courses().courseWork().list(courseId=course['id']).execute().get('courseWork', [])
-
+        
         #загружаем список работ по заданиям и добавляем недостающие поля 
         [courseWork, studentSumbissions] = get_submissions(course['id'], result, studentId)
         for work in studentSumbissions:
@@ -99,7 +105,7 @@ def get_data(studentId):
         #добавляем список заданий и работ в информацию о курсе 
         course['courseWork'] = courseWork
         course['studentSubmissions'] = studentSumbissions
-
+        
     return courses
 
 """
@@ -125,6 +131,38 @@ def checkMissingKeys(data, missingValues):
             
     return data
 
+
+
+"""
+Эта функция принимает список studentSubmissions и возвращает списки изменений
+состояния и оценок для каждого задания.
+"""
+def get_submission_history(data):
+    gradeHistory = []
+    stateHistory = []
+    for segment in data:
+        if 'submissionHistory' not in segment:
+            stateHistory.append([])
+            gradeHistory.append([])
+        else:
+            subm = segment['submissionHistory']
+            state = []
+            grade = []
+            if len(subm)>1:
+                for j in subm:
+                    if 'stateHistory' in j:
+                        state.append(j['stateHistory'])
+                    else:
+                        grade.append(j['gradeHistory'])
+                stateHistory.append(state)
+                gradeHistory.append(grade)
+            else:
+                if 'stateHistory' in subm[0]:
+                    stateHistory.append(subm[0]['stateHistory'])
+                else:
+                    gradeHistory.append(subm[0]['gradeHistory'])
+    a = [stateHistory, gradeHistory]
+    return a
 
 
 """
