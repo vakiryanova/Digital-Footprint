@@ -47,18 +47,20 @@ def get_students():
 def get_submissions(courseId, courseWork, studentId):
     submissions = []
     coursework = []
+    i=0
     for task in courseWork:
         #если задание не для всех студентов
-        if task['assigneeMode']=='INDIVIDUAL_STUDENTS':
+        if 'assigneeMode' in list(task.keys()):
+            if task['assigneeMode']=='INDIVIDUAL_STUDENTS':
             # и текущий студент имеет доступ к этому заданию
-            if studentId in task['individualStudentsOptions']['studentIds']:
+                if studentId in task['individualStudentsOptions']['studentIds']:
                 #загружаем и сохраняем информацию о работе
-                res = service.courses().courseWork().studentSubmissions().list(courseId=courseId, 
+                    res = service.courses().courseWork().studentSubmissions().list(courseId=courseId, 
                                                                           courseWorkId=task['id'],
                                                                           userId=studentId).execute()
-                submissions.append(res.get('studentSubmissions',[])[0])
+                    submissions.append(res.get('studentSubmissions',[])[0])
                 #сохраняем задание
-                coursework.append(task)
+                    coursework.append(task)
         #если задание для всех студентов
         else:
             #загружаем и сохраняем информацию о работе
@@ -67,7 +69,6 @@ def get_submissions(courseId, courseWork, studentId):
                                                                           userId=studentId).execute()
             submissions.append(res.get('studentSubmissions',[])[0])
             coursework.append(task)
-            
     return coursework, submissions
 
 
@@ -77,6 +78,8 @@ def get_submissions(courseId, courseWork, studentId):
 Эта функция принимает id студента.
 Возвращает список его курсов, заданий, работ.
 (структура courses в файле на диске)
+Вместо id можно передать строку "me", если авторизация была произведена через аккаунт студента, тогда функция вернет
+информацию о его курсах.
 """
 def get_data(studentId):
     missingKeys = [['late', False], ['assignedGrade', np.NaN]]
@@ -99,9 +102,14 @@ def get_data(studentId):
 
     return courses
 
-
-
-
+"""
+Возвращает информацию из профиля авторизированного студента
+"""
+def get_my_profile():
+    student_missing_keys = [['emailAddress', np.NaN], ['photoUrl', np.NaN], ['verifiedTeacher', False]]
+    student = service.userProfiles().get(userId='me').execute()
+    student = checkMissingKeys(student, student_missing_keys)
+    return student
 
 """
 Некоторые поля могут остуствовать в загружаемой информации, поэтому при попытке
@@ -116,7 +124,6 @@ def checkMissingKeys(data, missingValues):
             data[key[0]] = key[1]
             
     return data
-
 
 
 
