@@ -141,7 +141,6 @@ def get_course_info(course):
                 timeLeft['day'] = work['dueDate']['day'] - now.day
                 timeLeft['hour'] = work['dueTime']['hours'] - now.hour
                 timeLeft['minute'] = work['dueTime']['minutes'] - now.minute
-                timeLeft['second'] = 0 - now.second
                 flag = False
                 for i in list(timeLeft.keys()):
                     i = timeLeft[i]
