@@ -169,7 +169,10 @@ def get_course_info(course):
         studentSubmissions = service.courses().courseWork().studentSubmissions().list(courseId=course["id"], 
                                                                               courseWorkId = work["id"]).execute()
         studentSubmissions = studentSubmissions.get("studentSubmissions", [])          
-        work["studentSubmissions"] = extract_keys(studentSubmissions, studentSubmissionsKeys)    
+        work["studentSubmissions"] = extract_keys(studentSubmissions, studentSubmissionsKeys)
+        for item in work["studentSubmissions"]:
+            if math.isnan(item['late']):
+                item['late'] = False
     
     return course
     
