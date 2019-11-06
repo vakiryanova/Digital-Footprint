@@ -1,41 +1,73 @@
 import auth
 import numpy as np
 import pandas as pd
+import logging
+from datetime import datetime
+from googleapiclient.errors import HttpError
 
 #аутентификация
 service = auth.auth()
+logging.basicConfig(filename='example.log',level=logging.INFO)
 
+def log_event(level, message, timestamp, function, file):
+    def get_numeric_level(level):
+        if level=='debug':
+            return 10
+        elif level=='info':
+            return 20
+        elif level=='warning':
+            return 30
+        elif level=='error':
+            return 40
+        elif level=='critical':
+            return 50
+        else:
+            return 0   
+    log = {}
+    log['level'] = level
+    log['message'] = message
+    log['timestamp'] = timestamp
+    log['function'] = function
+    log['file'] = file
+    logging.log(get_numeric_level(level), log)
 
-
+    
 def get_students():
     """
-    Эта функция загружает список курсов, доступных преподавателю или администратору,
-    и достает списки студентов, подписанных на них.cПовторяющиеся студенты удаляются.
-    
+    Эта функция загружает список курсов, доступных преподавателю,
+    и достает списки студентов, подписанных на них.
+    Повторяющиеся студенты удаляются.
     Фунцкия возвращает список всех студентов со всех курсов (можно использовать для
     БД студентов, чтобы потом по id доставать нужную информацию)
     """
+    
     courses = service.courses().list().execute().get('courses', [])
+    if courses == []:
+        log_event('warning','нет доступных курсов', str(datetime.now()), 'get_students()', 'lib.py')
+        return
+    else:
+        log_event('info','загружено ' + str(len(courses)) + " курсов", str(datetime.now()), 'get_students()', 'lib.py')
+    
     students = []
     for course in courses:
-    #загружаем список студентов каждого курса
+        #загружаем список студентов каждого курса
         flag = False
         token = ''
+        course_students = []
         while not flag:
             result = service.courses().students().list(courseId=course['id'], pageToken=token).execute()
             student = result.get('students', [])
-            [students.append(i) for i in student]
+            [course_students.append(i['profile']) for i in student]
             token = result.get('nextPageToken', [])
             if not token:
                 flag = True
-    
-    #удаляем повторяющихся студентов
-    result = []
-    for i in range(len(students)): 
-        if students[i] not in students[i + 1:]: 
-            result.append(students[i])
-            
-    return result
+        students.append({'courseId':course['id'], 'students':course_students})
+                
+    if students == []:
+        log_event('warning','студентов нет', str(datetime.now()), 'get_students()', 'lib.py')
+    else:
+        log_event('info','студенты загружены', str(datetime.now()), 'get_students()', 'lib.py')
+    return students
 
 
 def get_submissions(courseId, courseWork, studentId):
@@ -52,29 +84,39 @@ def get_submissions(courseId, courseWork, studentId):
         #если задание не для всех студентов
         if 'assigneeMode' in list(task.keys()):
             if task['assigneeMode']=='INDIVIDUAL_STUDENTS':
-            # и текущий студент имеет доступ к этому заданию
+                # и текущий студент имеет доступ к этому заданию
                 if studentId in task['individualStudentsOptions']['studentIds']:
-                #загружаем и сохраняем информацию о работе
+                    #загружаем и сохраняем информацию о работе
+                    try:
+                        res = service.courses().courseWork().studentSubmissions().list(courseId=courseId, 
+                                                                          courseWorkId=task['id'],
+                                                                          userId=studentId).execute()
+                        submissions.append(res.get('studentSubmissions',[])[0])
+                        coursework.append(task)
+                    except HttpError as err:
+                        print(err)
+                        logging.log(0, err)
+            else:
+                try:
                     res = service.courses().courseWork().studentSubmissions().list(courseId=courseId, 
                                                                           courseWorkId=task['id'],
                                                                           userId=studentId).execute()
                     submissions.append(res.get('studentSubmissions',[])[0])
-                #сохраняем задание
                     coursework.append(task)
-        #если задание для всех студентов
-            else:
-            #загружаем и сохраняем информацию о работе
+                except HttpError as err:
+                    print(err)
+                    logging.log(0, err)
+        else:
+            try:
                 res = service.courses().courseWork().studentSubmissions().list(courseId=courseId, 
                                                                           courseWorkId=task['id'],
                                                                           userId=studentId).execute()
                 submissions.append(res.get('studentSubmissions',[])[0])
                 coursework.append(task)
-        else:
-            res = service.courses().courseWork().studentSubmissions().list(courseId=courseId, 
-                                                                          courseWorkId=task['id'],
-                                                                          userId=studentId).execute()
-            submissions.append(res.get('studentSubmissions',[])[0])
-            coursework.append(task)
+            except HttpError as err:
+                print(err)
+                logging.log(0, err)
+            
     return coursework, submissions
     
 
@@ -82,22 +124,33 @@ def get_data(studentId):
     """
     Эта функция принимает id студента.
     Возвращает список его курсов, заданий, работ.
-    Вместо id можно передать строку "me", если авторизация была произведена через аккаунт студента, тогда функция вернет
-    информацию о его курсах.
+    
+    (структура courses в файле на диске)
     """
     
     missingKeys = [['late', False], ['assignedGrade', np.NaN]]
-    
     #загружаем список курсов, который доступны авторизированному пользователю
     courses = service.courses().list(studentId=studentId).execute().get('courses', [])
     
+    if courses == []:
+        log_event('error','нет доступных курсов', str(datetime.now()), 'get_data()', 'lib.py')
+        return
+    else:
+        log_event('error','загружено ' + str(len(courses)) + ' курсов', str(datetime.now()), 'get_data()', 'lib.py')
+    
     for course in courses:
         studentSumbissions = []
+        
         #загружаем список заданий для каждого курса
         result = service.courses().courseWork().list(courseId=course['id']).execute().get('courseWork', [])
         
+        if result == []:
+            log_event('warning','у курса ' + str(course['id']) + ' нет заданий', str(datetime.now()), 'get_data()', 'lib.py')
+        else:
+            log_event('warning','у курса ' + str(course['id'])+' '+str(len(res)) + ' заданий', str(datetime.now()), 'get_data()', 'lib.py')
         #загружаем список работ по заданиям и добавляем недостающие поля 
         [courseWork, studentSumbissions] = get_submissions(course['id'], result, studentId)
+        
         for work in studentSumbissions:
             work = checkMissingKeys(work, missingKeys)
 
@@ -106,16 +159,6 @@ def get_data(studentId):
         course['studentSubmissions'] = studentSumbissions
         
     return courses
-
-
-def get_my_profile():
-    """
-    Возвращает информацию из профиля авторизированного студента
-    """
-    student_missing_keys = [['photoUrl', np.NaN], ['verifiedTeacher', False]]
-    student = service.userProfiles().get(userId='me').execute()
-    student = checkMissingKeys(student, student_missing_keys)
-    return student
 
 
 def checkMissingKeys(data, missingValues):
@@ -131,8 +174,6 @@ def checkMissingKeys(data, missingValues):
             data[key[0]] = key[1]
             
     return data
-
-
 
 
 def get_submission_history(data):
@@ -165,7 +206,6 @@ def get_submission_history(data):
                     gradeHistory.append(subm[0]['gradeHistory'])
     a = [stateHistory, gradeHistory]
     return a
-
 
 
 def make_file(title, data):
