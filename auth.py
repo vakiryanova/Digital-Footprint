@@ -4,6 +4,8 @@ import os.path
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+import logging
+import logs
 
 SCOPES = ['https://www.googleapis.com/auth/classroom.courses.readonly', #список курсов
           'https://www.googleapis.com/auth/classroom.rosters.readonly', #список студентов
@@ -34,5 +36,5 @@ def auth():
             pickle.dump(creds, token)
 
     service = build('classroom', 'v1', credentials=creds)
-    print('auth complete')
+    logger.log(logging.INFO, 'аутентификация прошла успешно')
     return service
