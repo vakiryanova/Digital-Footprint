@@ -262,7 +262,7 @@ def state_or_grade(element):
     
     
     
-def select_data_by_date(studentsSubmissions, d_from=0, d_to=0):
+def select_data_by_date(studentsSubmission, d_from=0, d_to=0):
     """
     Принимает: список работ студента (studentsSubmissions) и временной период 
                (даты в формате datetime.date).
