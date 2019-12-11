@@ -1,28 +1,41 @@
-import auth
+#! /usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from auth import auth
 import logs
-import numpy as np
 import datetime as dt
+from datetime import datetime
 import logging
 from googleapiclient.errors import HttpError
 
 #аутентификация
-service = auth.auth()
+service = auth.get_service()
 
 #инициализация логгинга
 logger = logs.logger_init()
 
-def get_courses():
+def get_course(courseId):
+    return service.courses().get(id=courseId).execute()
+
+def get_courses(studentId = None):
     """
     Принимает: -
     Вовзращает: список курсов, к которым есть доступ с используемым токеном 
                 пользователя.
     """
-    courses = service.courses().list().execute().get('courses', [])
-
-    if courses == []:
-        logger.log(logging.WARNING, 'нет курсов')
+    if studentId==None:
+        courses = service.courses().list().execute().get('courses', [])
+        if courses == []:
+            logger.log(logging.INFO, 'нет курсов')
+        else:
+            logger.log(logging.INFO, 'загружено {} курсов'.format(len(courses)))
     else:
-        logger.log(logging.INFO, 'загружено {} курсов'.format(len(courses)))
+        courses = service.courses().list(studentId=studentId).execute().get('courses', [])
+        
+    for course in courses:
+        course['creationTime'] = to_timestamp(course['creationTime'])
+        course['updateTime'] = to_timestamp(course['updateTime'])
+    
     return courses
 
 
@@ -57,6 +70,7 @@ def get_students(course):
     Принимает: один курс (или только поля курса id и name).
     Вовзращает: список студентов курса.
     """
+    #загрузка данных с API
     students = []
     flag = False
     token = ''
@@ -67,17 +81,29 @@ def get_students(course):
         token = result.get('nextPageToken', [])
         if not token:
             flag = True
-            
+    
+    #логгинг
     if students == []:
-        logger.log(logging.WARNING, 'на курсе {} ({}) нет студентов'.format(course['name'], course['id']))
+        logger.log(logging.INFO, 'на курсе {} ({}) нет студентов'.format(course['name'], course['id']))
     else:
         logger.log(logging.INFO, 'загружено {} студентов с курса {} ({})'.format(len(students), course['name'], course['id']))
     
-    #удаляем ненужные ключи
+    #удаляем ненужные ключи, добавляем требуемые
     for student in students:
-        for i in ['permissions', 'verifiedTeacher']:
+        #print(student['name'].keys())
+        if 'givenName' in student['name'].keys():
+            student['firstName'] = student['name']['givenName']
+        else:
+            student['firstName'] = '-'
+                
+        if 'familyName' in student['name'].keys():
+            student['lastName'] = student['name']['familyName']
+        else:
+            student['lastName'] = '-'
+        for i in ['permissions', 'verifiedTeacher', 'photoUrl', 'name']:
             if i in student.keys():
                 student.pop(i)
+    
     return students
 
 
@@ -99,15 +125,19 @@ def get_courseWork(course):
             flag = True
     
     if courseWork == []:
-        logger.log(logging.WARNING, 'на курсе {} ({}) нет заданий'.format(course['name'], course['id']))
+        logger.log(logging.INFO, 'на курсе {} ({}) нет заданий'.format(course['name'], course['id']))
     else:
         logger.log(logging.INFO, 'загружено {} заданий с курса {} ({})'.format(len(courseWork), course['name'], course['id']))
+        
+    for work in courseWork:
+        work['creationTime'] = to_timestamp(work['creationTime'])
+        work['updateTime'] = to_timestamp(work['updateTime'])
         
     return courseWork
 
 
 
-def get_studentSubmissions_by_student(courseWork, studentId):
+def get_studentSubmissions_by_student(courseWork, studentId, date_from, date_to):
     """
     Принимает: список заданий курса (courseWork) и id студента.
     Возвращает: список заданий, которые доступны этому студенту и его работы по ним.
@@ -116,38 +146,47 @@ def get_studentSubmissions_by_student(courseWork, studentId):
      студенту, информацию которого мы запрашиваем.
     """
     
-    def download_submissions(courseWorkId, coursework, submissions):
+    def download_submissions(courseWorkId):
         try:
             res = service.courses().courseWork().studentSubmissions().list(courseId=courseId, 
                                                                           courseWorkId=courseWorkId,
                                                                           userId=studentId).execute()
-            submissions.append(res.get('studentSubmissions',[])[0])
-            coursework.append(task)
+            res = res.get('studentSubmissions',[])[0]
+            change_submsissions_date_format([res])
+            res1 = select_data_by_date([res], date_from, date_to)
+            if res1==None:
+                return []
+            else:
+                res1 = checkMissingKeys(res1, submissionsMissingKeys)
+                return res1
         except HttpError as err:
             print(err)
             logger.log(logging.ERROR, err)
     
+    courseWorkMissingKeys = {'assigneeMode':'ALL_STUDENTS'}
+    submissionsMissingKeys = {'late': False, 'assignedGrade': None}
+    
+    courseWork=checkMissingKeys(courseWork, courseWorkMissingKeys)
     courseId = courseWork[0]['courseId']
-    submissions = []
     coursework = []
     
-    for task in courseWork:
+    for task in courseWork:      
         #если задание не для всех студентов, а для некоторых
         if task['assigneeMode']=='INDIVIDUAL_STUDENTS': 
             #и текущий студент имеет доступ к этому заданию
             if studentId in task['individualStudentsOptions']['studentIds']: 
                 #загружаем и сохраняем информацию о работе
-                download_submissions(task['id'], coursework, submissions)
+                result = download_submissions(task['id'])
+                if result!=[]:
+                    coursework.append(task)
+                    coursework[-1]['studentSubmissions'] = result
         else: #если задание для всех студентов
-            download_submissions(task['id'], coursework, submissions)
-           
-    change_submsissions_date_format(submissions)
-    
-    for item in submissions:
-        if 'updateTime' in item.keys():
-            item['updateTime'] = timestamp_to_dict(item['updateTime'])
-            
-    return coursework, submissions
+            result = download_submissions(task['id'])
+            if result!=[]:
+                coursework.append(task)
+                coursework[-1]['studentSubmissions'] = result
+   
+    return coursework
     
 
 
@@ -179,62 +218,70 @@ def get_studentSubmissions_by_courseWork(courseId, courseWorkId):
     
     for item in studentSubmissions:
         if 'updateTime' in item.keys():
-            item['updateTime'] = timestamp_to_dict(item['updateTime'])
+            item['updateTime'] = to_timestamp(item['updateTime'])
 
     return studentSubmissions
 
 
 
-def get_data_by_student(studentId):
+def get_data_by_student(student, date_from=0, date_to=1):
     """
     Принимает: id студента.
     Возвращает: список курсов, заданий, работ этого студента.
     """
-    courseWorkMissingKeys = {'assigneeMode':'ALL_STUDENTS'}
-    submissionsMissingKeys = {'late': False, 'assignedGrade': np.NaN}
+    studentId = student['id']
+    studentName = student['lastName']+' '+student['firstName']
     
     #загружаем список курсов, которые доступны конкретному студенту
-    courses = service.courses().list(studentId=studentId).execute().get('courses', [])
+    try:
+        courses = get_courses(studentId)
+    except:
+        logger.log(logging.ERROR, 'ошибка запроса данных для студента {}'.format(student['id']))
     
     if courses == []:
-        logger.log(logging.WARNING, 'студент {} не подписан ни на один курс'.format(studentId))
+        logger.log(logging.INFO, 'студент {} не подписан ни на один курс'.format(studentName))
         return
     else:
-        logger.log(logging.INFO, 'студент {} подписан на {} курсов'.format(studentId, len(courses)))
-    
-    for course in courses:
-        studentSumbissions = []
+        logging.log(logging.INFO, 'студент {} подписан на {} курсов'.format(studentName, len(courses)))
         
-        #загружаем список заданий для каждого курса
-        result = service.courses().courseWork().list(courseId=course['id']).execute().get('courseWork', [])
-        result = checkMissingKeys(result, courseWorkMissingKeys)
-        
-        if result == []:
-            logger.log(logging.INFO, 'у курса {} нет заданий'.format(course['name']))
-        else:
-            logger.log(logging.INFO, 'у курса {} {} заданий'.format(course['name'], len(result)))
-            
-        #загружаем список работ по заданиям и добавляем недостающие поля 
-        [courseWork, studentSumbissions] = get_studentSubmissions_by_student(result, studentId)
-        
-        for work in studentSumbissions:
-            work = checkMissingKeys(work, submissionsMissingKeys)
-
-        #добавляем список заданий и работ в информацию о курсе 
-        course['courseWork'] = courseWork
-        course['studentSubmissions'] = studentSumbissions
+    for course in courses:            
+        course['courseWork'] = get_courseWork(course)
+        if course['courseWork']!=[]:
+            try:
+                course['courseWork'] = get_studentSubmissions_by_student(course['courseWork'], studentId, date_from, date_to)
+            except:
+                logger.log(logging.ERROR, 
+                               'не удается загрузить информацию о работах\
+                               {}, проверьте правильность передавамых данных'.format(studentName))
+                
     return courses
 
+
+def checkKeys(data, keys):
+    """
+    Принимает: исходную информацию (list of dict); список полей, которые
+               должны присутствоовать в структуре, и их значений по умолчанию (dict).
+    Возвращает: исходные данные, но только с требуемыми полями.
+    
+    *Добавляет недостающие и удаляет лишние поля
+    """
+    data = checkMissingKeys(data, keys)
+    
+    for item in data:
+        for key in item.keys():
+            if key not in keys.keys():
+                item.pop(key)
+                
+    return data
 
 
 def checkMissingKeys(data, missingValues):
     """
     Принимает: исходную информацию (list of dict или dict); список полей, которые
-               должны присутвсовать в структуре, и их значений по умолчанию (dict).
+               должны присутствоовать в структуре, и их значений по умолчанию (dict).
     Возвращает: исходные данные, но с новыми полями.
     
-    *Некоторые поля могут остуствовать в загружаемой информации, поэтому при 
-    попытке обратиться к ним возникнет ошибка.
+    *Добавляет недостающие поля
     """
     if type(data) == list:
         for key in missingValues.keys():
@@ -246,8 +293,7 @@ def checkMissingKeys(data, missingValues):
             if key not in data.keys():
                 data[key] = missingValues[key]
     return data
-    
-    
+  
     
 def state_or_grade(element):
     """
@@ -262,7 +308,7 @@ def state_or_grade(element):
     
     
     
-def select_data_by_date(studentsSubmission, d_from=0, d_to=0):
+def select_data_by_date(studentSubmissions, d_from=0, d_to=1):
     """
     Принимает: список работ студента (studentsSubmissions) и временной период 
                (даты в формате datetime.date).
@@ -274,22 +320,26 @@ def select_data_by_date(studentsSubmission, d_from=0, d_to=0):
        период.
     """
     
-    if d_from==0 and d_to==0:
-        logger.log(logging.INFO, 'период не указан')
-        return
+    if d_from==0 and d_to==1:
+        logger.log(logging.INFO, 'вся история')
+        return studentSubmissions
     
-    if type(d_from)!=dt.date and d_from!=0:
-        logger.log(logging.WARNING, 'дата должна быть в формате datetime.date')
-        return
+    if type(d_from)!=dt.date and d_from not in [0,1]:
+        logger.log(logging.WARNING, 'дата "от" должна быть в формате datetime.date или "0" или "1"')
+        return studentSubmissions
     
-    if type(d_to)!=dt.date and d_to!=0:
-        logger.log(logging.WARNING, 'дата должна быть в формате datetime.date')
-        return
+    if type(d_to)!=dt.date and d_to!=1:
+        logger.log(logging.WARNING, 'дата "до" должна быть в формате datetime.date или "1"')
+        return studentSubmissions
     
-    if d_from!=0 and d_to!=0 and d_from > d_to:
+    if d_from!=0 and d_to!=1 and d_from > d_to:
         logger.log(logging.WARNING, 'дата "от" должна быть меньше даты "до"')
-        return
+        return studentSubmissions
     
+        
+    if d_from == 1:
+        d_from=datetime.now().date()
+        
     #проверка на вхождения работ в заданный диапазон дат    
     new_data = []
     for work in studentSubmissions:
@@ -298,38 +348,32 @@ def select_data_by_date(studentsSubmission, d_from=0, d_to=0):
             for item in work['submissionHistory']:
                 el_type = state_or_grade(item)
                 curr = item[el_type+'History']
-                curr['date'] = dt.date(
-                        curr['timestamp']['year'], 
-                        curr['timestamp']['month'], 
-                        curr['timestamp']['day'])
                 
                 flag = False
                 if d_from != 0:
-                    if (curr['date'] - d_from).days > -1:
-                        logger.log(logging.INFO, 'добавили {} тк {} > {}'.format(work['id'], curr['date'], d_from))
+                    if (curr['timestamp'].date() - d_from).days > -1:
+                        logger.log(logging.INFO, 'добавили {} тк {} > ({})'.format(work['id'], curr['timestamp'], d_from))
                         buf.append({state_or_grade(item)+'History': curr})
                         flag = True
                     
-                if d_to != 0:
-                    if (d_to - curr['date']).days > -1:
+                if d_to != 1:
+                    if (d_to - curr['timestamp'].date()).days > -1:
                         if not flag:
                             buf.append({state_or_grade(item)+'History': curr})
-                            logger.log(logging.INFO, 'добавили {} тк {} < {}'.format(work['id'], curr['date'], d_to))
+                            logger.log(logging.INFO, 'добавили {} тк {} < ({})'.format(work['id'], curr['timestamp'], d_to))
                             flag = True
                     else:
                         if flag:
-                            logger.log(logging.INFO, 'удалили {} тк {} > {}'.format(work['id'], curr['date'], d_to))
+                            logger.log(logging.INFO, 'удалили {} тк {} > ({})'.format(work['id'], curr['timestamp'], d_to))
                             buf.pop(-1)
                         
                 if d_from != 0:
                     if flag == True:
-                        if (curr['date'] - d_from).days <= -1:
-                            logger.log(logging.INFO, 'удалили {} тк {} > {}'.format(work['id'], curr['date'], d_to))
+                        if (curr['timestamp'].date() - d_from).days <= -1:
+                            logger.log(logging.INFO, 'удалили {} тк {} > ({})'.format(work['id'], curr['timestamp'], d_to))
                             buf.pop(-1)
             
             if buf != []:            
-                for i in buf:
-                    i[state_or_grade(i)+'History'].pop('date')
                 new_data.append(work.copy())
                 new_data[-1]['submissionHistory'] = buf
                 
@@ -340,15 +384,15 @@ def select_data_by_date(studentsSubmission, d_from=0, d_to=0):
     else:
         logger.log(logging.INFO, 'за указанный период было найдено {} работ'.format(len(new_data)))
     logger.log(logging.INFO, '')
-                    
+    
     return new_data
 
 
 
-def timestamp_to_dict(timestamp):
+def to_timestamp(timestamp):
     """
     Принимает: timestamp в формате 2014-10-02T15:01:23.045123456Z
-    Возвращает: словарь.
+    Возвращает: отметку времени в формате datetime.
     """
         
     #избавляется от лишней части отметки времени
@@ -359,20 +403,12 @@ def timestamp_to_dict(timestamp):
         else:
             new_time = time.split('Z', 1)[0]
         if new_time == time:
-            logger.log(logging.WARNING, 'что-то пошло не так при парсинге отметки времени')
+            logger.log(logging.ERROR, 'что-то пошло не так при парсинге отметки времени')
         return new_time
         
     timestamp = helper(timestamp)
     timestamp = dt.datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S')
-    new_timestamp = {}
-    new_timestamp['year'] = timestamp.year
-    new_timestamp['month'] = timestamp.month
-    new_timestamp['day'] = timestamp.day
-    new_timestamp['hours'] = timestamp.hour
-    new_timestamp['minutes'] = timestamp.minute
-    new_timestamp['seconds'] = timestamp.second
-    return new_timestamp
-
+    return timestamp
 
 
 def change_submsissions_date_format(studentsSubmissions):
@@ -386,4 +422,4 @@ def change_submsissions_date_format(studentsSubmissions):
         if 'submissionHistory' in item.keys():
             for element in item['submissionHistory']:
                 el_type = state_or_grade(element)
-                element[el_type+'History']['timestamp'] = timestamp_to_dict(element[el_type+'History'].pop(el_type+'Timestamp'))
+                element[el_type+'History']['timestamp'] = to_timestamp(element[el_type+'History'].pop(el_type+'Timestamp'))
